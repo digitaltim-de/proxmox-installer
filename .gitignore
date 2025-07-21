@@ -1,0 +1,125 @@
+# Logs
+*.log
+logs/
+/var/log/proxmox-*.log
+
+# Local configuration files
+configs/local.conf
+configs/dev.conf
+configs/production.conf
+configs/custom.conf
+.env.local
+
+# Temporary files
+*.tmp
+*.temp
+/tmp/
+temp/
+
+# Backup files
+*.bak
+*.backup
+backups/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.vim/
+
+# VM specific files
+*.iso
+*.qcow2
+*.vmdk
+*.vdi
+
+# Secrets and sensitive data
+*.key
+*.pem
+*.crt
+secrets/
+.secrets
+*.password
+*.passwd
+
+# Local testing
+test/
+testing/
+sandbox/
+
+# Build artifacts
+build/
+dist/
+target/
+
+# Package files
+*.deb
+*.rpm
+*.pkg
+
+# Compressed files
+*.zip
+*.tar.gz
+*.tgz
+*.tar.bz2
+
+# Windows template files (too large for git)
+templates/*.iso
+templates/*.wim
+templates/*.vhd
+templates/*.vhdx
+
+# Local documentation drafts
+docs/local/
+docs/draft/
+
+# Cache directories
+.cache/
+cache/
+
+# Runtime files
+*.pid
+*.lock
+
+# Local overrides
+override.conf
+local_override.sh
+
+# SSL certificates
+*.crt
+*.key
+*.pem
+ssl/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Python cache (if any Python scripts are added)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# Node modules (if any Node.js tools are added)
+node_modules/
+npm-debug.log*
+
+# Local Makefile overrides
+Makefile.local
