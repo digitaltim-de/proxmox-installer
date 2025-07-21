@@ -2,10 +2,67 @@
 
 # Setup script for Proxmox CS2 Worker repository
 # This script makes all scripts executable and sets up the environment
+# It can also automatically run the installation script
 
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Default configuration
+DEFAULT_WORKERS=5
+DEFAULT_LOADBALANCER_URL=""
+RUN_INSTALL=false
+WORKERS=$DEFAULT_WORKERS
+LOADBALANCER_URL=$DEFAULT_LOADBALANCER_URL
+
+# Parse command line arguments
+parse_arguments() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --workers=*)
+                WORKERS="${1#*=}"
+                if ! [[ "$WORKERS" =~ ^[0-9]+$ ]] || [[ "$WORKERS" -lt 1 ]] || [[ "$WORKERS" -gt 20 ]]; then
+                    echo "Error: Workers must be a number between 1 and 20"
+                    exit 1
+                fi
+                # Automatically set RUN_INSTALL to true when workers is specified
+                RUN_INSTALL=true
+                ;;
+            --loadbalancer=*)
+                LOADBALANCER_URL="${1#*=}"
+                ;;
+            --no-install)
+                RUN_INSTALL=false
+                ;;
+            --help)
+                echo "Usage: $0 [OPTIONS]"
+                echo ""
+                echo "Options:"
+                echo "  --workers=N            Number of worker VMs to configure (default: $DEFAULT_WORKERS)"
+                echo "                         Specifying this option will automatically run the installation"
+                echo "  --loadbalancer=URL     Load balancer URL for worker registration"
+                echo "  --no-install           Don't automatically run install_proxmox.sh after setup"
+                echo "  --help                 Display this help message"
+                echo ""
+                echo "Examples:"
+                echo "  $0 --workers=10 --loadbalancer=https://example.com"
+                echo "  $0 --workers=5"
+                echo "  $0 --no-install"
+                echo ""
+                exit 0
+                ;;
+            *)
+                echo "Unknown option: $1"
+                echo "Use --help for usage information."
+                exit 1
+                ;;
+        esac
+        shift
+    done
+}
+
+# Parse command line arguments
+parse_arguments "$@"
 
 echo "Setting up Proxmox CS2 Worker repository..."
 
@@ -143,16 +200,25 @@ echo "============================================"
 echo "Proxmox CS2 Worker Setup Complete!"
 echo "============================================"
 echo
-echo "Next steps:"
-echo "1. Review and edit configs/local.conf for your environment"
-echo "2. Load the environment: source .env"
-echo "3. Run the installation: sudo ./install_proxmox.sh --workers=5"
-echo
-echo "For detailed setup instructions, see README.md"
-echo
+
+if [[ "$RUN_INSTALL" == "true" ]]; then
+    echo "Installation will start automatically after this message."
+    echo
+    echo "For future reference, here are the available commands:"
+else
+    echo "Next steps:"
+    echo "1. Review and edit configs/local.conf for your environment"
+    echo "2. Load the environment: source .env"
+    echo "3. Run the installation: ./setup.sh --workers=5"
+    echo
+    echo "For detailed setup instructions, see README.md"
+    echo
+fi
+
 echo "Quick commands:"
 echo "  Setup environment:     source .env"
-echo "  Install Proxmox:       sudo ./install_proxmox.sh --workers=5"
+echo "  One-step setup:        ./setup.sh --workers=5 --loadbalancer=URL"
+echo "  Manual installation:   sudo ./install_proxmox.sh --workers=5"
 echo "  Provision workers:     ./provision_workers.sh --workers=5"
 echo "  Check status:          ./scripts/status.sh health"
 echo "  Manage workers:        ./scripts/manage_workers.sh list"
@@ -181,3 +247,24 @@ tree "$REPO_DIR" -L 2 2>/dev/null || find "$REPO_DIR" -maxdepth 2 -type d | sort
 
 echo
 echo "Setup completed successfully!"
+
+# Run installation if requested
+if [[ "$RUN_INSTALL" == "true" ]]; then
+    echo
+    echo "============================================"
+    echo "Starting Proxmox installation..."
+    echo "============================================"
+    echo
+
+    # Build the command with parameters
+    INSTALL_CMD="sudo ./install_proxmox.sh --workers=$WORKERS"
+    if [[ -n "$LOADBALANCER_URL" ]]; then
+        INSTALL_CMD+=" --loadbalancerurl=$LOADBALANCER_URL"
+    fi
+
+    echo "Running: $INSTALL_CMD"
+    echo
+
+    # Execute the installation command
+    $INSTALL_CMD
+fi

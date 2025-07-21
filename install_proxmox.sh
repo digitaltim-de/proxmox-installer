@@ -30,7 +30,7 @@ log() {
     shift
     local message="$*"
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    
+
     case "$level" in
         "INFO")
             echo -e "${GREEN}[INFO]${NC} $message" | tee -a "$LOG_FILE"
@@ -66,79 +66,80 @@ check_root() {
 # Check system requirements
 check_requirements() {
     log "INFO" "Checking system requirements..."
-    
-    # Check if running on Debian 12
-    if ! grep -q "bookworm" /etc/os-release; then
-        error_exit "This script requires Debian 12 (bookworm)"
+
+    # Check if running on Debian/Ubuntu
+    if ! grep -q -E "(debian|ubuntu)" /etc/os-release; then
+        log "WARN" "This system doesn't appear to be Debian or Ubuntu"
+        log "WARN" "The installation may not work as expected"
     fi
-    
+
     # Check CPU virtualization support
     if ! grep -q -E "(vmx|svm)" /proc/cpuinfo; then
         error_exit "CPU does not support hardware virtualization"
     fi
-    
+
     # Check if NVIDIA GPU is present
     if ! lspci | grep -i nvidia > /dev/null; then
         error_exit "No NVIDIA GPU detected"
     fi
-    
+
     # Check minimum RAM (16GB recommended)
     local ram_gb=$(free -g | awk '/^Mem:/{print $2}')
     if [[ $ram_gb -lt 16 ]]; then
         log "WARN" "Less than 16GB RAM detected ($ram_gb GB). Consider upgrading for better performance."
     fi
-    
+
     log "INFO" "System requirements check passed"
 }
 
 # Configure repository sources
 configure_repositories() {
     log "INFO" "Configuring package repositories..."
-    
+
     # Backup original sources
     cp /etc/apt/sources.list /etc/apt/sources.list.backup
-    
+
     # Add Proxmox VE repository
     cat > /etc/apt/sources.list.d/pve-install-repo.list << EOF
 deb [arch=amd64] http://download.proxmox.com/debian/pve bookworm pve-no-subscription
 EOF
-    
+
     # Add Proxmox VE repository key
     wget https://enterprise.proxmox.com/debian/proxmox-release-bookworm.gpg -O /etc/apt/trusted.gpg.d/proxmox-release-bookworm.gpg
-    
+
     # Update package lists
     apt update || error_exit "Failed to update package lists"
-    
+
     log "INFO" "Package repositories configured successfully"
 }
 
 # Install Proxmox VE
 install_proxmox() {
     log "INFO" "Installing Proxmox VE..."
-    
+
     # Install required packages
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
         postfix \
         open-iscsi \
         || error_exit "Failed to install prerequisites"
-    
+
     # Install Proxmox VE kernel and packages
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
         proxmox-ve \
         postfix \
         open-iscsi \
         || error_exit "Failed to install Proxmox VE"
-    
+
     # Remove os-prober (recommended by Proxmox)
     apt-get remove -y os-prober || true
-    
+
     log "INFO" "Proxmox VE installed successfully"
 }
 
 # Install NVIDIA drivers and vGPU unlock
 install_nvidia_vgpu() {
     log "INFO" "Installing NVIDIA drivers and vGPU unlock..."
-    
+
     # Install NVIDIA drivers
     apt-get update
     apt-get install -y \
@@ -149,45 +150,45 @@ install_nvidia_vgpu() {
         curl \
         git \
         || error_exit "Failed to install build dependencies"
-    
+
     # Download and install NVIDIA drivers
     cd /tmp
-    
+
     # Get latest NVIDIA driver version
     NVIDIA_VERSION="535.129.03"  # Update as needed
     NVIDIA_DRIVER="NVIDIA-Linux-x86_64-${NVIDIA_VERSION}.run"
-    
+
     if [[ ! -f "$NVIDIA_DRIVER" ]]; then
         wget "https://us.download.nvidia.com/XFree86/Linux-x86_64/${NVIDIA_VERSION}/${NVIDIA_DRIVER}" \
             || error_exit "Failed to download NVIDIA driver"
     fi
-    
+
     # Install NVIDIA driver
     chmod +x "$NVIDIA_DRIVER"
     ./"$NVIDIA_DRIVER" --silent --dkms || error_exit "Failed to install NVIDIA driver"
-    
+
     # Clone and install vgpu_unlock
     if [[ ! -d "/opt/vgpu_unlock" ]]; then
         git clone https://github.com/DualCoder/vgpu_unlock.git /opt/vgpu_unlock \
             || error_exit "Failed to clone vgpu_unlock repository"
     fi
-    
+
     cd /opt/vgpu_unlock
-    
+
     # Apply vGPU unlock patches
     ./vgpu_unlock_patcher.sh || error_exit "Failed to apply vGPU unlock patches"
-    
+
     # Load vGPU unlock module
     echo "vfio-pci" >> /etc/modules
     echo "mdev" >> /etc/modules
-    
+
     log "INFO" "NVIDIA drivers and vGPU unlock installed successfully"
 }
 
 # Configure vGPU profiles
 configure_vgpu_profiles() {
     log "INFO" "Configuring vGPU profiles for $WORKERS workers..."
-    
+
     # Create vGPU configuration script
     cat > /usr/local/bin/setup-vgpu-profiles.sh << EOF
 #!/bin/bash
@@ -219,9 +220,9 @@ done
 
 echo "vGPU profiles created successfully"
 EOF
-    
+
     chmod +x /usr/local/bin/setup-vgpu-profiles.sh
-    
+
     # Create systemd service for vGPU setup
     cat > /etc/systemd/system/vgpu-setup.service << EOF
 [Unit]
@@ -237,23 +238,23 @@ RemainAfterExit=yes
 [Install]
 WantedBy=multi-user.target
 EOF
-    
+
     systemctl daemon-reload
     systemctl enable vgpu-setup.service
-    
+
     log "INFO" "vGPU profiles configured successfully"
 }
 
 # Configure Proxmox VE
 configure_proxmox() {
     log "INFO" "Configuring Proxmox VE..."
-    
+
     # Enable IOMMU
     if ! grep -q "intel_iommu=on" /etc/default/grub; then
         sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="quiet"/GRUB_CMDLINE_LINUX_DEFAULT="quiet intel_iommu=on iommu=pt pcie_acs_override=downstream,multifunction nofb nomodeset video=vesafb:off,efifb:off"/' /etc/default/grub
         update-grub
     fi
-    
+
     # Configure vfio modules
     cat > /etc/modules-load.d/vfio.conf << EOF
 vfio
@@ -261,28 +262,28 @@ vfio_iommu_type1
 vfio_pci
 vfio_virqfd
 EOF
-    
+
     # Update initramfs
     update-initramfs -u
-    
+
     # Configure Proxmox storage
     pvesm add dir local-templates --path /var/lib/vz/template --content vztmpl,iso,snippets
-    
+
     log "INFO" "Proxmox VE configured successfully"
 }
 
 # Download Windows 11 ISO and create template
 setup_windows_template() {
     log "INFO" "Setting up Windows 11 template..."
-    
+
     # Create template directory
     mkdir -p /var/lib/vz/template/iso
     mkdir -p /var/lib/vz/template/snippets
-    
+
     # Note: Windows 11 ISO must be manually downloaded due to licensing
     log "WARN" "Windows 11 ISO must be manually downloaded and placed in /var/lib/vz/template/iso/"
     log "WARN" "Download from: https://www.microsoft.com/software-download/windows11"
-    
+
     # Create cloud-init snippet for Windows
     cat > /var/lib/vz/template/snippets/windows-cloudinit.yml << EOF
 #cloud-config
@@ -303,27 +304,27 @@ write_files:
 runcmd:
   - powershell.exe -ExecutionPolicy Bypass -File C:\\Windows\\Temp\\bootstrap_worker.ps1
 EOF
-    
+
     log "INFO" "Windows 11 template setup prepared"
 }
 
 # Create VM template
 create_vm_template() {
     log "INFO" "Creating Windows 11 VM template..."
-    
+
     # VM configuration
     local VMID=9000
     local VM_NAME="win11-cs2-template"
     local MEMORY=8192
     local CORES=4
     local DISK_SIZE="60G"
-    
+
     # Check if template already exists
     if qm status $VMID >/dev/null 2>&1; then
         log "WARN" "VM template $VMID already exists, skipping creation"
         return 0
     fi
-    
+
     # Create VM
     qm create $VMID \
         --name "$VM_NAME" \
@@ -343,7 +344,7 @@ create_vm_template() {
         --efidisk0 local-lvm:1,format=qcow2,efitype=4m \
         --tpmstate0 local-lvm:1,version=v2.0 \
         || error_exit "Failed to create VM template"
-    
+
     log "INFO" "VM template $VMID created successfully"
     log "WARN" "Manual setup required:"
     log "WARN" "1. Start VM $VMID and install Windows 11"
@@ -356,7 +357,7 @@ create_vm_template() {
 # Create provisioning script
 create_provisioning_script() {
     log "INFO" "Creating worker provisioning script..."
-    
+
     cat > "$SCRIPT_DIR/provision_workers.sh" << 'EOF'
 #!/bin/bash
 
@@ -379,18 +380,18 @@ log "INFO" "Provisioning $WORKERS worker VMs..."
 for i in $(seq 1 $WORKERS); do
     VMID=$((BASE_VMID + i))
     VM_NAME="cs2-worker-$i"
-    
+
     log "INFO" "Creating worker VM $i (VMID: $VMID)..."
-    
+
     # Clone template
     qm clone $TEMPLATE_VMID $VMID \
         --name "$VM_NAME" \
         --full \
         || { log "ERROR" "Failed to clone template for worker $i"; continue; }
-    
+
     # Get vGPU UUID for this worker
     VGPU_UUID=$(ls /sys/bus/mdev/devices/ | sed -n "${i}p")
-    
+
     if [[ -n "$VGPU_UUID" ]]; then
         # Assign vGPU to VM
         qm set $VMID --hostpci0 "$VGPU_UUID,mdev=$VGPU_UUID"
@@ -398,14 +399,14 @@ for i in $(seq 1 $WORKERS); do
     else
         log "WARN" "No vGPU available for worker $i"
     fi
-    
+
     # Configure VM-specific settings
     qm set $VMID \
         --ciuser worker \
         --sshkeys ~/.ssh/authorized_keys \
         --ipconfig0 "ip=dhcp" \
         --startup "order=$i,up=30,down=30"
-    
+
     # Start VM
     qm start $VMID
     log "INFO" "Started worker VM $i"
@@ -413,18 +414,18 @@ done
 
 log "INFO" "Worker provisioning completed"
 EOF
-    
+
     chmod +x "$SCRIPT_DIR/provision_workers.sh"
-    
+
     log "INFO" "Provisioning script created successfully"
 }
 
 # Create common functions library
 create_common_library() {
     log "INFO" "Creating common functions library..."
-    
+
     mkdir -p "$SCRIPT_DIR/scripts"
-    
+
     cat > "$SCRIPT_DIR/scripts/common.sh" << 'EOF'
 #!/bin/bash
 
@@ -443,7 +444,7 @@ log() {
     shift
     local message="$*"
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    
+
     case "$level" in
         "INFO")
             echo -e "${GREEN}[INFO]${NC} $message"
@@ -458,7 +459,7 @@ log() {
             echo -e "${BLUE}[DEBUG]${NC} $message"
             ;;
     esac
-    
+
     if [[ -w "/var/log/proxmox-workers.log" ]] || [[ -w "$(dirname "/var/log/proxmox-workers.log")" ]]; then
         echo "[$timestamp] [$level] $message" >> "/var/log/proxmox-workers.log"
     fi
@@ -475,19 +476,19 @@ wait_for_vm() {
     local vmid="$1"
     local timeout="${2:-300}"
     local count=0
-    
+
     log "INFO" "Waiting for VM $vmid to be ready..."
-    
+
     while [[ $count -lt $timeout ]]; do
         if qm agent "$vmid" ping >/dev/null 2>&1; then
             log "INFO" "VM $vmid is ready"
             return 0
         fi
-        
+
         sleep 5
         count=$((count + 5))
     done
-    
+
     log "ERROR" "VM $vmid did not become ready within ${timeout}s"
     return 1
 }
@@ -498,7 +499,7 @@ get_vm_ip() {
     qm agent "$vmid" network-get-interfaces | jq -r '.[] | select(.name=="Ethernet") | .["ip-addresses"][] | select(.["ip-address-type"]=="ipv4") | .["ip-address"]' | head -1
 }
 EOF
-    
+
     log "INFO" "Common functions library created successfully"
 }
 
@@ -561,11 +562,11 @@ parse_arguments() {
 main() {
     log "INFO" "Starting Proxmox VE installation with GPU worker support..."
     log "INFO" "Configuration: Workers=$WORKERS, LoadBalancer=$LOADBALANCER_URL"
-    
+
     # Pre-installation checks
     check_root
     check_requirements
-    
+
     # Installation steps
     configure_repositories
     install_proxmox
@@ -576,14 +577,14 @@ main() {
     create_vm_template
     create_provisioning_script
     create_common_library
-    
+
     log "INFO" "Installation completed successfully!"
     log "WARN" "IMPORTANT: A reboot is required to activate the new kernel and IOMMU settings"
     log "INFO" "After reboot:"
     log "INFO" "1. Complete Windows 11 template setup manually"
     log "INFO" "2. Run ./provision_workers.sh to create worker VMs"
     log "INFO" "3. Check /var/log/proxmox-install.log for detailed logs"
-    
+
     # Display next steps
     cat << EOF
 
