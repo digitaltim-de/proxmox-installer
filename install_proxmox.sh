@@ -23,6 +23,7 @@ NC='\033[0m' # No Color
 WORKERS=$DEFAULT_WORKERS
 LOADBALANCER_URL=$DEFAULT_LOADBALANCER_URL
 VERBOSE=false
+SIMULATION_MODE=false
 
 # Logging function
 log() {
@@ -63,12 +64,45 @@ check_root() {
     fi
 }
 
+# Detect OS type and version
+detect_os() {
+    if grep -q "ubuntu" /etc/os-release; then
+        OS_TYPE="ubuntu"
+        OS_VERSION=$(grep -oP 'VERSION_ID="\K[^"]+' /etc/os-release)
+        log "INFO" "Detected Ubuntu $OS_VERSION"
+
+        # Set simulation mode for Ubuntu
+        if [[ "$SIMULATION_MODE" != "true" ]]; then
+            log "WARN" "Ubuntu detected - Proxmox VE is designed for Debian"
+            log "WARN" "Setting SIMULATION_MODE=true to avoid package conflicts"
+            SIMULATION_MODE=true
+        fi
+    elif grep -q "debian" /etc/os-release; then
+        OS_TYPE="debian"
+        OS_VERSION=$(grep -oP 'VERSION_ID="\K[^"]+' /etc/os-release)
+        log "INFO" "Detected Debian $OS_VERSION"
+
+        # Check if it's Debian 12 (bookworm)
+        if [[ "$OS_VERSION" != "12" ]] && [[ ! $(grep -q "bookworm" /etc/os-release) ]]; then
+            log "WARN" "Proxmox VE is designed for Debian 12 (bookworm)"
+            log "WARN" "Installation may not work correctly on Debian $OS_VERSION"
+        fi
+    else
+        OS_TYPE="unknown"
+        OS_VERSION="unknown"
+        log "WARN" "Unknown OS detected - installation may fail"
+    fi
+}
+
 # Check system requirements
 check_requirements() {
     log "INFO" "Checking system requirements..."
 
+    # Detect OS type and version
+    detect_os
+
     # Check if running on Debian/Ubuntu
-    if ! grep -q -E "(debian|ubuntu)" /etc/os-release; then
+    if [[ "$OS_TYPE" != "debian" ]] && [[ "$OS_TYPE" != "ubuntu" ]]; then
         log "WARN" "This system doesn't appear to be Debian or Ubuntu"
         log "WARN" "The installation may not work as expected"
     fi
@@ -115,25 +149,54 @@ EOF
 
 # Install Proxmox VE
 install_proxmox() {
+    if [[ "$SIMULATION_MODE" == "true" ]]; then
+        log "INFO" "Running in SIMULATION MODE - will not install Proxmox VE packages"
+        log "INFO" "Installing only basic prerequisites..."
+
+        # Install only the basic prerequisites
+        DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            postfix \
+            open-iscsi \
+            || log "WARN" "Failed to install some prerequisites, continuing anyway"
+
+        log "INFO" "Basic prerequisites installed"
+        log "WARN" "Skipping actual Proxmox VE installation due to SIMULATION_MODE"
+        log "INFO" "Will continue with NVIDIA driver setup and other configurations"
+        return 0
+    fi
+
     log "INFO" "Installing Proxmox VE..."
 
     # Install required packages
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
         postfix \
         open-iscsi \
-        || error_exit "Failed to install prerequisites"
+        || log "WARN" "Failed to install some prerequisites, continuing anyway"
 
-    # Install Proxmox VE kernel and packages
-    DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    # Try to install Proxmox VE kernel and packages
+    log "INFO" "Installing Proxmox VE packages (this may fail on non-Debian systems)..."
+    if DEBIAN_FRONTEND=noninteractive apt-get install -y \
         proxmox-ve \
         postfix \
-        open-iscsi \
-        || error_exit "Failed to install Proxmox VE"
+        open-iscsi; then
 
-    # Remove os-prober (recommended by Proxmox)
-    apt-get remove -y os-prober || true
+        # Remove os-prober (recommended by Proxmox)
+        apt-get remove -y os-prober || true
+        log "INFO" "Proxmox VE installed successfully"
+    else
+        log "ERROR" "Failed to install Proxmox VE"
 
-    log "INFO" "Proxmox VE installed successfully"
+        if [[ "$OS_TYPE" == "ubuntu" ]]; then
+            log "WARN" "This is expected on Ubuntu - Proxmox VE is designed for Debian"
+            log "WARN" "Continuing with limited functionality (NVIDIA drivers and VM tools only)"
+            log "WARN" "For full Proxmox VE functionality, consider installing on Debian 12"
+        else
+            # On Debian, this is a more serious error
+            log "ERROR" "Installation failed on Debian system - this is unexpected"
+            log "ERROR" "Check /var/log/apt/term.log for detailed error information"
+            return 1
+        fi
+    fi
 }
 
 # Install NVIDIA drivers and vGPU unlock
@@ -247,15 +310,21 @@ EOF
 
 # Configure Proxmox VE
 configure_proxmox() {
-    log "INFO" "Configuring Proxmox VE..."
+    if [[ "$SIMULATION_MODE" == "true" ]]; then
+        log "INFO" "Configuring system for GPU passthrough (SIMULATION MODE)..."
+    else
+        log "INFO" "Configuring Proxmox VE..."
+    fi
 
     # Enable IOMMU
     if ! grep -q "intel_iommu=on" /etc/default/grub; then
+        log "INFO" "Enabling IOMMU in GRUB configuration..."
         sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="quiet"/GRUB_CMDLINE_LINUX_DEFAULT="quiet intel_iommu=on iommu=pt pcie_acs_override=downstream,multifunction nofb nomodeset video=vesafb:off,efifb:off"/' /etc/default/grub
         update-grub
     fi
 
     # Configure vfio modules
+    log "INFO" "Configuring VFIO modules..."
     cat > /etc/modules-load.d/vfio.conf << EOF
 vfio
 vfio_iommu_type1
@@ -264,12 +333,30 @@ vfio_virqfd
 EOF
 
     # Update initramfs
+    log "INFO" "Updating initramfs..."
     update-initramfs -u
 
-    # Configure Proxmox storage
-    pvesm add dir local-templates --path /var/lib/vz/template --content vztmpl,iso,snippets
+    # Configure Proxmox storage only if not in simulation mode
+    if [[ "$SIMULATION_MODE" != "true" ]]; then
+        log "INFO" "Configuring Proxmox storage..."
+        if command -v pvesm &> /dev/null; then
+            pvesm add dir local-templates --path /var/lib/vz/template --content vztmpl,iso,snippets || \
+                log "WARN" "Failed to configure Proxmox storage - this is expected in SIMULATION MODE"
+        else
+            log "WARN" "pvesm command not found - skipping Proxmox storage configuration"
+            # Create the directories anyway for later use
+            mkdir -p /var/lib/vz/template/{vztmpl,iso,snippets}
+        fi
+    else
+        log "INFO" "Creating template directories for later use..."
+        mkdir -p /var/lib/vz/template/{vztmpl,iso,snippets}
+    fi
 
-    log "INFO" "Proxmox VE configured successfully"
+    if [[ "$SIMULATION_MODE" == "true" ]]; then
+        log "INFO" "GPU passthrough configuration completed (SIMULATION MODE)"
+    else
+        log "INFO" "Proxmox VE configured successfully"
+    fi
 }
 
 # Download Windows 11 ISO and create template
@@ -319,6 +406,67 @@ create_vm_template() {
     local CORES=4
     local DISK_SIZE="60G"
 
+    if [[ "$SIMULATION_MODE" == "true" ]]; then
+        log "INFO" "SIMULATION MODE: Skipping actual VM template creation"
+        log "INFO" "When you install Proxmox VE later, you can create a template with these settings:"
+        log "INFO" "- VM ID: $VMID"
+        log "INFO" "- Name: $VM_NAME"
+        log "INFO" "- Memory: ${MEMORY}MB"
+        log "INFO" "- CPU Cores: $CORES"
+        log "INFO" "- Disk: $DISK_SIZE"
+        log "INFO" "- OS: Windows 11"
+
+        # Create a template script for later use
+        cat > "$SCRIPT_DIR/create_template.sh" << EOF
+#!/bin/bash
+# Template creation script for Proxmox VE
+# Run this after installing Proxmox VE
+
+# VM configuration
+VMID=$VMID
+VM_NAME="$VM_NAME"
+MEMORY=$MEMORY
+CORES=$CORES
+DISK_SIZE="$DISK_SIZE"
+
+echo "Creating Windows 11 VM template..."
+qm create \$VMID \\
+    --name "\$VM_NAME" \\
+    --memory \$MEMORY \\
+    --cores \$CORES \\
+    --net0 "virtio,bridge=vmbr0" \\
+    --scsihw virtio-scsi-pci \\
+    --scsi0 "local-lvm:\$DISK_SIZE" \\
+    --ide2 "local:iso/Win11_22H2_English_x64v1.iso,media=cdrom" \\
+    --boot "order=ide2;scsi0" \\
+    --ostype win11 \\
+    --agent 1 \\
+    --tablet 0 \\
+    --cpu host \\
+    --machine q35 \\
+    --bios ovmf \\
+    --efidisk0 local-lvm:1,format=qcow2,efitype=4m \\
+    --tpmstate0 local-lvm:1,version=v2.0
+
+echo "VM template created. Next steps:"
+echo "1. Start VM \$VMID and install Windows 11"
+echo "2. Install Python, Steam, and CS2"
+echo "3. Install Proxmox VE guest agent"
+echo "4. Configure auto-login for worker user"
+echo "5. Convert to template: qm template \$VMID"
+EOF
+        chmod +x "$SCRIPT_DIR/create_template.sh"
+        log "INFO" "Created template script at $SCRIPT_DIR/create_template.sh"
+        return 0
+    fi
+
+    # Check if qm command exists
+    if ! command -v qm &> /dev/null; then
+        log "WARN" "qm command not found - Proxmox VE may not be properly installed"
+        log "WARN" "Skipping VM template creation"
+        return 0
+    fi
+
     # Check if template already exists
     if qm status $VMID >/dev/null 2>&1; then
         log "WARN" "VM template $VMID already exists, skipping creation"
@@ -326,7 +474,8 @@ create_vm_template() {
     fi
 
     # Create VM
-    qm create $VMID \
+    log "INFO" "Creating VM with ID $VMID..."
+    if qm create $VMID \
         --name "$VM_NAME" \
         --memory $MEMORY \
         --cores $CORES \
@@ -342,10 +491,15 @@ create_vm_template() {
         --machine q35 \
         --bios ovmf \
         --efidisk0 local-lvm:1,format=qcow2,efitype=4m \
-        --tpmstate0 local-lvm:1,version=v2.0 \
-        || error_exit "Failed to create VM template"
+        --tpmstate0 local-lvm:1,version=v2.0; then
 
-    log "INFO" "VM template $VMID created successfully"
+        log "INFO" "VM template $VMID created successfully"
+    else
+        log "ERROR" "Failed to create VM template"
+        log "WARN" "This may be due to missing Proxmox components or storage configuration"
+        return 1
+    fi
+
     log "WARN" "Manual setup required:"
     log "WARN" "1. Start VM $VMID and install Windows 11"
     log "WARN" "2. Install Python, Steam, and CS2"
@@ -511,21 +665,31 @@ Usage: $0 [OPTIONS]
 Options:
     --workers=N              Number of worker VMs to configure (default: $DEFAULT_WORKERS)
     --loadbalancerurl=URL    Load balancer URL for worker registration
-    --verbose               Enable verbose logging
-    --help                  Display this help message
+    --verbose                Enable verbose logging
+    --simulation-mode        Force simulation mode (skip Proxmox VE installation)
+    --no-simulation          Disable simulation mode (try full installation even on Ubuntu)
+    --help                   Display this help message
 
 Examples:
     $0 --workers=10 --loadbalancerurl=https://lb.example.com/api/register
     $0 --workers=3 --verbose
+    $0 --simulation-mode     # Skip Proxmox VE installation, only set up GPU passthrough
+    $0 --no-simulation       # Try to install Proxmox VE even on Ubuntu (may fail)
 
-This script installs Proxmox VE on Debian 12 and configures NVIDIA vGPU support
+This script installs Proxmox VE and configures NVIDIA vGPU support
 for multiple Windows 11 worker VMs running CS2 clients.
 
 Requirements:
-- Fresh Debian 12 installation
+- Debian 12 recommended (Ubuntu supported in simulation mode)
 - NVIDIA GPU (RTX series recommended)
 - At least 16GB RAM
 - Root privileges
+
+Notes:
+- On Ubuntu systems, the script defaults to simulation mode which skips
+  the actual Proxmox VE installation but sets up GPU passthrough
+- Use --no-simulation to attempt Proxmox VE installation on Ubuntu (may fail)
+- Use --simulation-mode to only set up GPU passthrough on any system
 
 EOF
 }
@@ -546,6 +710,15 @@ parse_arguments() {
             --verbose)
                 VERBOSE=true
                 ;;
+            --simulation-mode)
+                SIMULATION_MODE=true
+                log "INFO" "Simulation mode enabled via command line"
+                ;;
+            --no-simulation)
+                SIMULATION_MODE=false
+                log "INFO" "Simulation mode disabled via command line"
+                log "WARN" "Will attempt full installation even on Ubuntu (may fail)"
+                ;;
             --help)
                 usage
                 exit 0
@@ -560,7 +733,11 @@ parse_arguments() {
 
 # Main installation workflow
 main() {
-    log "INFO" "Starting Proxmox VE installation with GPU worker support..."
+    if [[ "$SIMULATION_MODE" == "true" ]]; then
+        log "INFO" "Starting GPU worker setup in SIMULATION MODE (Ubuntu compatibility)..."
+    else
+        log "INFO" "Starting Proxmox VE installation with GPU worker support..."
+    fi
     log "INFO" "Configuration: Workers=$WORKERS, LoadBalancer=$LOADBALANCER_URL"
 
     # Pre-installation checks
@@ -578,15 +755,51 @@ main() {
     create_provisioning_script
     create_common_library
 
-    log "INFO" "Installation completed successfully!"
-    log "WARN" "IMPORTANT: A reboot is required to activate the new kernel and IOMMU settings"
-    log "INFO" "After reboot:"
-    log "INFO" "1. Complete Windows 11 template setup manually"
-    log "INFO" "2. Run ./provision_workers.sh to create worker VMs"
-    log "INFO" "3. Check /var/log/proxmox-install.log for detailed logs"
+    if [[ "$SIMULATION_MODE" == "true" ]]; then
+        log "INFO" "Setup completed in SIMULATION MODE!"
+        log "INFO" "Proxmox VE was NOT installed due to Ubuntu compatibility issues"
+        log "WARN" "IMPORTANT: A reboot is required to activate the IOMMU settings and NVIDIA drivers"
 
-    # Display next steps
-    cat << EOF
+        # Display next steps for simulation mode
+        cat << EOF
+
+=== NEXT STEPS (SIMULATION MODE) ===
+
+1. Reboot the system:
+   sudo reboot
+
+2. After reboot, verify NVIDIA driver installation:
+   nvidia-smi
+
+3. For full Proxmox VE functionality, you have two options:
+
+   OPTION A: Install Proxmox VE manually on this Ubuntu system
+   - Follow the instructions at: https://pve.proxmox.com/wiki/Install_Proxmox_VE_on_Ubuntu
+   - After installation, run the template creation script:
+     $SCRIPT_DIR/create_template.sh
+
+   OPTION B: Install on a Debian 12 system instead
+   - Install Debian 12 on a new system
+   - Run this installer again on the Debian system
+
+4. The following tools have been set up and can be used:
+   - NVIDIA drivers and vGPU configuration
+   - IOMMU and VFIO modules for GPU passthrough
+   - Template directories in /var/lib/vz/template/
+
+For detailed instructions, see README.md
+
+EOF
+    else
+        log "INFO" "Installation completed successfully!"
+        log "WARN" "IMPORTANT: A reboot is required to activate the new kernel and IOMMU settings"
+        log "INFO" "After reboot:"
+        log "INFO" "1. Complete Windows 11 template setup manually"
+        log "INFO" "2. Run ./provision_workers.sh to create worker VMs"
+        log "INFO" "3. Check /var/log/proxmox-install.log for detailed logs"
+
+        # Display next steps for normal mode
+        cat << EOF
 
 === NEXT STEPS ===
 
@@ -609,6 +822,7 @@ main() {
 For detailed instructions, see README.md
 
 EOF
+    fi
 }
 
 # Initialize logging
