@@ -12,6 +12,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_WORKERS=5
 DEFAULT_LOADBALANCER_URL=""
 RUN_INSTALL=false
+NO_UNIFIED_MEMORY=false
 WORKERS=$DEFAULT_WORKERS
 LOADBALANCER_URL=$DEFAULT_LOADBALANCER_URL
 
@@ -34,6 +35,9 @@ parse_arguments() {
             --no-install)
                 RUN_INSTALL=false
                 ;;
+            --no-unified-memory)
+                NO_UNIFIED_MEMORY=true
+                ;;
             --help)
                 echo "Usage: $0 [OPTIONS]"
                 echo ""
@@ -42,12 +46,14 @@ parse_arguments() {
                 echo "                         Specifying this option will automatically run the installation"
                 echo "  --loadbalancer=URL     Load balancer URL for worker registration"
                 echo "  --no-install           Don't automatically run install_proxmox.sh after setup"
+                echo "  --no-unified-memory    Disable NVIDIA unified memory support (fixes some driver installation issues)"
                 echo "  --help                 Display this help message"
                 echo ""
                 echo "Examples:"
                 echo "  $0 --workers=10 --loadbalancer=https://example.com"
                 echo "  $0 --workers=5"
                 echo "  $0 --no-install"
+                echo "  $0 --workers=5 --no-unified-memory"
                 echo ""
                 exit 0
                 ;;
@@ -218,6 +224,7 @@ fi
 echo "Quick commands:"
 echo "  Setup environment:     source .env"
 echo "  One-step setup:        ./setup.sh --workers=5 --loadbalancer=URL"
+echo "  With NVIDIA fix:       ./setup.sh --workers=5 --no-unified-memory"
 echo "  Manual installation:   sudo ./install_proxmox.sh --workers=5"
 echo "  Provision workers:     ./provision_workers.sh --workers=5"
 echo "  Check status:          ./scripts/status.sh health"
@@ -260,6 +267,9 @@ if [[ "$RUN_INSTALL" == "true" ]]; then
     INSTALL_CMD="sudo ./install_proxmox.sh --workers=$WORKERS"
     if [[ -n "$LOADBALANCER_URL" ]]; then
         INSTALL_CMD+=" --loadbalancerurl=$LOADBALANCER_URL"
+    fi
+    if [[ "$NO_UNIFIED_MEMORY" == "true" ]]; then
+        INSTALL_CMD+=" --no-unified-memory"
     fi
 
     echo "Running: $INSTALL_CMD"

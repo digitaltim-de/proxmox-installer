@@ -24,6 +24,7 @@ WORKERS=$DEFAULT_WORKERS
 LOADBALANCER_URL=$DEFAULT_LOADBALANCER_URL
 VERBOSE=false
 SIMULATION_MODE=false
+NO_UNIFIED_MEMORY=false
 
 # Logging function
 log() {
@@ -228,7 +229,16 @@ install_nvidia_vgpu() {
 
     # Install NVIDIA driver
     chmod +x "$NVIDIA_DRIVER"
-    ./"$NVIDIA_DRIVER" --silent --dkms || error_exit "Failed to install NVIDIA driver"
+
+    # Build the driver installation command
+    local NVIDIA_INSTALL_CMD="./$NVIDIA_DRIVER --silent --dkms"
+    if [[ "$NO_UNIFIED_MEMORY" == "true" ]]; then
+        log "INFO" "Installing NVIDIA driver without unified memory support"
+        NVIDIA_INSTALL_CMD+=" --no-unified-memory"
+    fi
+
+    # Execute the driver installation command
+    eval "$NVIDIA_INSTALL_CMD" || error_exit "Failed to install NVIDIA driver"
 
     # Clone and install vgpu_unlock
     if [[ ! -d "/opt/vgpu_unlock" ]]; then
@@ -668,6 +678,7 @@ Options:
     --verbose                Enable verbose logging
     --simulation-mode        Force simulation mode (skip Proxmox VE installation)
     --no-simulation          Disable simulation mode (try full installation even on Ubuntu)
+    --no-unified-memory      Disable NVIDIA unified memory support (fixes some driver installation issues)
     --help                   Display this help message
 
 Examples:
@@ -675,6 +686,7 @@ Examples:
     $0 --workers=3 --verbose
     $0 --simulation-mode     # Skip Proxmox VE installation, only set up GPU passthrough
     $0 --no-simulation       # Try to install Proxmox VE even on Ubuntu (may fail)
+    $0 --no-unified-memory   # Install NVIDIA driver without unified memory support (fixes some driver issues)
 
 This script installs Proxmox VE and configures NVIDIA vGPU support
 for multiple Windows 11 worker VMs running CS2 clients.
@@ -690,6 +702,8 @@ Notes:
   the actual Proxmox VE installation but sets up GPU passthrough
 - Use --no-simulation to attempt Proxmox VE installation on Ubuntu (may fail)
 - Use --simulation-mode to only set up GPU passthrough on any system
+- If NVIDIA driver installation fails with nvidia-uvm errors, try using
+  the --no-unified-memory option to disable CUDA unified memory support
 
 EOF
 }
@@ -718,6 +732,10 @@ parse_arguments() {
                 SIMULATION_MODE=false
                 log "INFO" "Simulation mode disabled via command line"
                 log "WARN" "Will attempt full installation even on Ubuntu (may fail)"
+                ;;
+            --no-unified-memory)
+                NO_UNIFIED_MEMORY=true
+                log "INFO" "Unified memory support disabled for NVIDIA driver"
                 ;;
             --help)
                 usage
