@@ -67,10 +67,17 @@ if ! command -v pvesh >/dev/null; then
   apt update
   apt install -y wget gnupg2 curl lsb-release software-properties-common genisoimage jq
 
+  # Detect Ubuntu version and force Proxmox repo to bookworm
+  UBUNTU_CODENAME=$(lsb_release -cs)
+  if [[ "$UBUNTU_CODENAME" == "noble" || "$UBUNTU_CODENAME" > "noble" ]]; then
+    log "Detected Ubuntu 24.04+ (codename: $UBUNTU_CODENAME). Forcing Proxmox repo to bookworm."
+    UBUNTU_CODENAME="bookworm"
+  fi
+
   # Force Bookworm repository (Debian-compatible, even on Ubuntu)
   wget -qO- "https://enterprise.proxmox.com/debian/proxmox-release-bookworm.gpg" \
     | gpg --dearmor > /etc/apt/trusted.gpg.d/proxmox-release.gpg
-  echo "deb http://download.proxmox.com/debian/pve bookworm pve-no-subscription" \
+  echo "deb http://download.proxmox.com/debian/pve $UBUNTU_CODENAME pve-no-subscription" \
     > /etc/apt/sources.list.d/pve-install.list
 
   # Update and upgrade without replacing the kernel
