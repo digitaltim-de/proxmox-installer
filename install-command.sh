@@ -1,7 +1,7 @@
 #!/bin/bash
 # Ultra-short Proxmox Installer - just adjust and copy-paste!
 
-wget -O /tmp/install.sh https://raw.githubusercontent.com/digitaltim-de/proxmox-installer/main/install-proxmox.sh && chmod +x /tmp/install.sh && /tmp/install.sh \
+wget -O /tmp/install.sh https://raw.githubusercontent.com/digitaltim-de/proxmox-installer/refs/heads/main/install-proxmox.sh && chmod +x /tmp/install.sh && /tmp/install.sh \
   --vms=4 \
   --ram=4096 \
   --start-zip="https://example.com/your-project.zip" \
