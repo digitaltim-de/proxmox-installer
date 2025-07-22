@@ -59,7 +59,7 @@ done
 [[ -n "$START_ZIP" ]] || error "--start-zip required"
 [[ -n "$START_FILE" ]] || error "--start-file required"
 
-# Always use Debian bookworm repo for Proxmox on Ubuntu (22.04/24.04+)
+# Ensure Proxmox repository always uses 'bookworm' for compatibility
 DEBIAN_CODENAME="bookworm"
 
 # Step 1: Install Proxmox on Ubuntu
