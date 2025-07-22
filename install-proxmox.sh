@@ -59,6 +59,9 @@ done
 [[ -n "$START_ZIP" ]] || error "--start-zip required"
 [[ -n "$START_FILE" ]] || error "--start-file required"
 
+# Always use Debian bookworm repo for Proxmox on Ubuntu (22.04/24.04+)
+DEBIAN_CODENAME="bookworm"
+
 # Step 1: Install Proxmox on Ubuntu
 # =====================================
 if ! command -v pvesh >/dev/null; then
@@ -68,15 +71,7 @@ if ! command -v pvesh >/dev/null; then
   apt update
   apt install -y wget gnupg2 curl lsb-release software-properties-common genisoimage jq
 
-  # Detect Ubuntu version and map to Debian codename
-  UBUNTU_VERSION=$(lsb_release -rs)
-  if [[ "$UBUNTU_VERSION" == "22.04" ]]; then
-    DEBIAN_CODENAME="bookworm"
-  else
-    error "Unsupported Ubuntu version: $UBUNTU_VERSION (only 22.04 supported)"
-  fi
-
-  # Add Proxmox repository
+  # Add Proxmox repository (always bookworm, never jammy/noble)
   wget -qO- "https://enterprise.proxmox.com/debian/proxmox-release-${DEBIAN_CODENAME}.gpg" \
     | gpg --dearmor > /etc/apt/trusted.gpg.d/proxmox-release.gpg
   echo "deb http://download.proxmox.com/debian/pve ${DEBIAN_CODENAME} pve-no-subscription" \
