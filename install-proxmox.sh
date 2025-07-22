@@ -58,113 +58,35 @@ done
 [[ -n "$START_ZIP" ]] || error "--start-zip required"
 [[ -n "$START_FILE" ]] || error "--start-file required"
 
-# Step 1: Install Proxmox (if not present)
+# Step 1: Install Proxmox (Ubuntu-compatible)
 # =====================================
 if ! command -v pvesh >/dev/null; then
-  log "Installing Proxmox..."
+  log "Installing Proxmox (Ubuntu-compatible)..."
+
+  # Update system and install dependencies
   apt update
   apt install -y wget gnupg2 curl lsb-release software-properties-common genisoimage jq
-  
-  # Check Ubuntu version and use appropriate Proxmox repo
-  UBUNTU_VERSION=$(lsb_release -cs)
-  log "Detected Ubuntu version: $UBUNTU_VERSION"
-  
-  if [[ "$UBUNTU_VERSION" == "noble" ]]; then
-    # Ubuntu 24.04 - use jammy (22.04) repo as fallback
-    PROXMOX_REPO="jammy"
-    log "Ubuntu 24.04 detected, using Ubuntu 22.04 Proxmox repository as fallback"
-  elif [[ "$UBUNTU_VERSION" == "jammy" ]]; then
-    PROXMOX_REPO="jammy"
-  elif [[ "$UBUNTU_VERSION" == "focal" ]]; then
-    PROXMOX_REPO="focal"
-  else
-    # Fallback to jammy for unknown versions
-    PROXMOX_REPO="jammy"
-    log "Unknown Ubuntu version, using jammy repository as fallback"
-  fi
-  
-  log "Using Proxmox repository: $PROXMOX_REPO"
-  echo "deb http://download.proxmox.com/debian/pve $PROXMOX_REPO pve-no-subscription" > /etc/apt/sources.list.d/pve-install.list
-  
-  # Try to add Proxmox key and repo
-  if wget -qO- "https://enterprise.proxmox.com/debian/proxmox-ve-release-7.x.gpg" | gpg --dearmor > /etc/apt/trusted.gpg.d/proxmox.gpg; then
-    log "Proxmox GPG key added successfully"
-  else
-    log "Warning: Could not add Proxmox GPG key, continuing with alternative installation"
-    rm -f /etc/apt/sources.list.d/pve-install.list
-  fi
-  
+
+  # Force Bookworm repository (Debian-compatible, even on Ubuntu)
+  wget -qO- "https://enterprise.proxmox.com/debian/proxmox-release-bookworm.gpg" \
+    | gpg --dearmor > /etc/apt/trusted.gpg.d/proxmox-release.gpg
+  echo "deb http://download.proxmox.com/debian/pve bookworm pve-no-subscription" \
+    > /etc/apt/sources.list.d/pve-install.list
+
+  # Update and upgrade without replacing the kernel
   apt update
-  
-  # Try to install Proxmox VE, fallback to manual QEMU/KVM if it fails
-  if apt install -y proxmox-ve postfix open-iscsi 2>/dev/null; then
-    log "Proxmox VE installed successfully"
-    systemctl enable --now pvedaemon pveproxy pvestatd
-  else
-    log "Proxmox VE installation failed, installing QEMU/KVM manually..."
-    rm -f /etc/apt/sources.list.d/pve-install.list
-    apt update
-    
-    # Install QEMU/KVM and required tools manually
-    DEBIAN_FRONTEND=noninteractive apt install -y \
-      qemu-kvm libvirt-daemon-system libvirt-clients bridge-utils \
-      virt-manager qemu-utils ovmf swtpm-tools \
-      postfix open-iscsi
-    
-    # Create minimal Proxmox-like commands
-    cat > /usr/local/bin/pvesh <<'EOF'
-#!/bin/bash
-# Minimal pvesh replacement for basic functionality
-case "$1" in
-  "get")
-    case "$2" in
-      "/cluster/nextid")
-        # Return next available VM ID
-        echo $((100 + $(ls /etc/pve/qemu-server/ 2>/dev/null | wc -l) + 1))
-        ;;
-      "/nodes/localhost/qemu")
-        # Return VM list in JSON format
-        echo "[]"
-        ;;
-    esac
-    ;;
-esac
-EOF
-    chmod +x /usr/local/bin/pvesh
-    
-    # Create basic qm command wrapper
-    cat > /usr/local/bin/qm <<'EOF'
-#!/bin/bash
-# Minimal qm replacement using direct qemu
-echo "Warning: Using fallback QEMU implementation"
-case "$1" in
-  "create")
-    echo "VM creation would happen here with ID: $2"
-    ;;
-  "set")
-    echo "VM setting would be applied to VM: $2"
-    ;;
-  "start")
-    echo "VM start would happen for VM: $2"
-    ;;
-esac
-EOF
-    chmod +x /usr/local/bin/qm
-    
-    # Create minimal pvesm command
-    cat > /usr/local/bin/pvesm <<'EOF'
-#!/bin/bash
-# Minimal pvesm replacement
-case "$1" in
-  "status")
-    exit 0  # Always return success
-    ;;
-esac
-EOF
-    chmod +x /usr/local/bin/pvesm
-    
-    log "Fallback QEMU/KVM installation completed"
-  fi
+  DEBIAN_FRONTEND=noninteractive apt full-upgrade -y --allow-downgrades || true
+
+  # Install Proxmox VE without kernel replacement
+  DEBIAN_FRONTEND=noninteractive apt install -y proxmox-ve postfix open-iscsi --no-install-recommends || true
+
+  # Remove enterprise repository (no subscription)
+  rm -f /etc/apt/sources.list.d/pve-enterprise.list || true
+
+  # Start Proxmox services
+  systemctl enable --now pvedaemon pveproxy pvestatd
+
+  log "Proxmox installation completed (Ubuntu-compatible)."
 else
   log "Proxmox already installed, skipping..."
   # Ensure required tools are available
