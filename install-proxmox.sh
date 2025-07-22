@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # =====================================
-# Vollautomatischer Proxmox + Windows 11 VM Installer (mit NAT + Auto-Start-ZIP)
+# Fully Automated Proxmox + Windows 11 VM Installer (with NAT + Auto-Start-ZIP)
 # =====================================
 
 WINDOWS_ISO_PATH="/var/lib/vz/template/iso/Win11.iso"
@@ -51,15 +51,15 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-# Validierung
+# Validation
 [[ $EUID -eq 0 ]] || error "This script must be run as root"
 ((VMS > 0)) || error "--vms must be > 0"
-[[ ${#KEYS[@]} -eq $VMS ]] || error "Keys count must equal VM count"
+[[ ${#KEYS[@]} -eq $VMS ]] || error "Number of keys (${#KEYS[@]}) must equal number of VMs ($VMS)"
 [[ -n "$START_ZIP" ]] || error "--start-zip required"
 [[ -n "$START_FILE" ]] || error "--start-file required"
 
 # =====================================
-# Schritt 1: Proxmox installieren (wenn nicht vorhanden)
+# Step 1: Install Proxmox (if not present)
 # =====================================
 if ! command -v pvesh >/dev/null; then
   log "Installing Proxmox..."
@@ -79,7 +79,7 @@ else
 fi
 
 # =====================================
-# Schritt 2: ISOs laden
+# Step 2: Download ISOs
 # =====================================
 log "Downloading Windows + VirtIO ISOs..."
 mkdir -p "$(dirname "$WINDOWS_ISO_PATH")"
@@ -87,14 +87,14 @@ mkdir -p "$(dirname "$WINDOWS_ISO_PATH")"
 [[ -f "$VIRTIO_ISO_PATH" ]] || wget -O "$VIRTIO_ISO_PATH" "$VIRTIO_ISO_URL"
 
 # =====================================
-# Funktion: Autounattend ISO bauen
+# Function: Build Autounattend ISO
 # =====================================
 build_unattend_iso() {
   local vmid="$1" key="$2" vm_name="$3"
   local tmp="/tmp/autounattend-$vmid"
   mkdir -p "$tmp"
 
-  # Autounattend.xml generieren
+  # Generate Autounattend.xml
   cat > "$tmp/Autounattend.xml" <<EOF
 <?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend">
@@ -135,7 +135,7 @@ EOF
 }
 
 # =====================================
-# Schritt 3: VMs anlegen
+# Step 3: Create VMs
 # =====================================
 STORAGE="local-lvm"
 if ! pvesm status --storage local-lvm &>/dev/null; then STORAGE="local"; fi
@@ -161,7 +161,7 @@ for i in $(seq 1 "$VMS"); do
 done
 
 # =====================================
-# Schritt 4: Alle VMs starten
+# Step 4: Start all VMs
 # =====================================
 for i in $(seq 1 "$VMS"); do
   vmid=$(pvesh get /nodes/localhost/qemu --output-format json | jq -r ".[] | select(.name==\"win11-vm$i\") | .vmid")
