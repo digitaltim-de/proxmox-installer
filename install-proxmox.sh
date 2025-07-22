@@ -65,7 +65,24 @@ if ! command -v pvesh >/dev/null; then
   log "Installing Proxmox..."
   apt update
   apt install -y wget gnupg2 curl lsb-release software-properties-common genisoimage jq
-  echo "deb http://download.proxmox.com/debian/pve $(lsb_release -cs) pve-no-subscription" > /etc/apt/sources.list.d/pve-install.list
+  
+  # Check Ubuntu version and use appropriate Proxmox repo
+  UBUNTU_VERSION=$(lsb_release -cs)
+  if [[ "$UBUNTU_VERSION" == "noble" ]]; then
+    # Ubuntu 24.04 - use jammy (22.04) repo as fallback
+    PROXMOX_REPO="jammy"
+    log "Ubuntu 24.04 detected, using Ubuntu 22.04 Proxmox repository as fallback"
+  elif [[ "$UBUNTU_VERSION" == "jammy" ]]; then
+    PROXMOX_REPO="jammy"
+  elif [[ "$UBUNTU_VERSION" == "focal" ]]; then
+    PROXMOX_REPO="focal"
+  else
+    # Fallback to jammy for unknown versions
+    PROXMOX_REPO="jammy"
+    log "Unknown Ubuntu version, using jammy repository as fallback"
+  fi
+  
+  echo "deb http://download.proxmox.com/debian/pve $PROXMOX_REPO pve-no-subscription" > /etc/apt/sources.list.d/pve-install.list
   wget -qO- "https://enterprise.proxmox.com/debian/proxmox-ve-release-7.x.gpg" | gpg --dearmor > /etc/apt/trusted.gpg.d/proxmox.gpg
   apt update
   DEBIAN_FRONTEND=noninteractive apt full-upgrade -y
