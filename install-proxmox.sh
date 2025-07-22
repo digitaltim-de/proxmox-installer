@@ -5,11 +5,12 @@ set -euo pipefail
 # Fully Automated Proxmox + Windows 11 VM Installer (with NAT + Auto-Start-ZIP)
 # =====================================
 
+# Paths and URLs
 WINDOWS_ISO_PATH="/var/lib/vz/template/iso/Win11.iso"
-WINDOWS_ISO_URL="https://software-download.microsoft.com/db/Win11_23H2_English_x64.iso"
 VIRTIO_ISO_PATH="/var/lib/vz/template/iso/virtio-win.iso"
 VIRTIO_ISO_URL="https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso"
 
+# Variables
 VMS=0
 RAM=4096
 START_ZIP=""
@@ -58,26 +59,27 @@ done
 [[ -n "$START_ZIP" ]] || error "--start-zip required"
 [[ -n "$START_FILE" ]] || error "--start-file required"
 
-# Step 1: Install Proxmox (Ubuntu-compatible)
+# Step 1: Install Proxmox on Ubuntu
 # =====================================
 if ! command -v pvesh >/dev/null; then
-  log "Installing Proxmox (Ubuntu-compatible)..."
+  log "Installing Proxmox on Ubuntu..."
 
   # Update system and install dependencies
   apt update
   apt install -y wget gnupg2 curl lsb-release software-properties-common genisoimage jq
 
-  # Detect Ubuntu version and force Proxmox repo to bookworm
-  UBUNTU_CODENAME=$(lsb_release -cs)
-  if [[ "$UBUNTU_CODENAME" == "noble" || "$UBUNTU_CODENAME" > "noble" ]]; then
-    log "Detected Ubuntu 24.04+ (codename: $UBUNTU_CODENAME). Forcing Proxmox repo to bookworm."
-    UBUNTU_CODENAME="bookworm"
+  # Detect Ubuntu version and map to Debian codename
+  UBUNTU_VERSION=$(lsb_release -rs)
+  if [[ "$UBUNTU_VERSION" == "22.04" ]]; then
+    DEBIAN_CODENAME="bookworm"
+  else
+    error "Unsupported Ubuntu version: $UBUNTU_VERSION (only 22.04 supported)"
   fi
 
-  # Force Bookworm repository (Debian-compatible, even on Ubuntu)
-  wget -qO- "https://enterprise.proxmox.com/debian/proxmox-release-bookworm.gpg" \
+  # Add Proxmox repository
+  wget -qO- "https://enterprise.proxmox.com/debian/proxmox-release-${DEBIAN_CODENAME}.gpg" \
     | gpg --dearmor > /etc/apt/trusted.gpg.d/proxmox-release.gpg
-  echo "deb http://download.proxmox.com/debian/pve $UBUNTU_CODENAME pve-no-subscription" \
+  echo "deb http://download.proxmox.com/debian/pve ${DEBIAN_CODENAME} pve-no-subscription" \
     > /etc/apt/sources.list.d/pve-install.list
 
   # Update and upgrade without replacing the kernel
@@ -93,7 +95,7 @@ if ! command -v pvesh >/dev/null; then
   # Start Proxmox services
   systemctl enable --now pvedaemon pveproxy pvestatd
 
-  log "Proxmox installation completed (Ubuntu-compatible)."
+  log "Proxmox installation completed on Ubuntu."
 else
   log "Proxmox already installed, skipping..."
   # Ensure required tools are available
@@ -101,19 +103,24 @@ else
   command -v jq >/dev/null || apt install -y jq
 fi
 
+# Step 2: Handle Windows ISO
 # =====================================
-# Step 2: Download ISOs
-# =====================================
-log "Downloading Windows + VirtIO ISOs..."
+log "Handling Windows ISO..."
 mkdir -p "$(dirname "$WINDOWS_ISO_PATH")"
-[[ -f "$WINDOWS_ISO_PATH" ]] || wget -O "$WINDOWS_ISO_PATH" "$WINDOWS_ISO_URL"
+if [[ ! -f "$WINDOWS_ISO_PATH" ]]; then
+  error "Windows 11 ISO not found at $WINDOWS_ISO_PATH. Please download it manually from https://www.microsoft.com/de-de/software-download/windows11 and place it there."
+fi
+
+# Step 3: Download VirtIO ISO
+# =====================================
+log "Downloading VirtIO ISO..."
 [[ -f "$VIRTIO_ISO_PATH" ]] || wget -O "$VIRTIO_ISO_PATH" "$VIRTIO_ISO_URL"
 
 # =====================================
 # Function: Build Autounattend ISO
 # =====================================
 build_unattend_iso() {
-  local vmid="$1" key="$2" vm_name="$3"
+  local vmid="$1" key="$2" vm_name="$3_tracking"
   local tmp="/tmp/autounattend-$vmid"
   mkdir -p "$tmp"
 
@@ -158,7 +165,7 @@ EOF
 }
 
 # =====================================
-# Step 3: Create VMs
+# Step 4: Create VMs
 # =====================================
 STORAGE="local-lvm"
 if ! pvesm status --storage local-lvm &>/dev/null; then STORAGE="local"; fi
@@ -184,7 +191,7 @@ for i in $(seq 1 "$VMS"); do
 done
 
 # =====================================
-# Step 4: Start all VMs
+# Step 5: Start all VMs
 # =====================================
 for i in $(seq 1 "$VMS"); do
   vmid=$(pvesh get /nodes/localhost/qemu --output-format json | jq -r ".[] | select(.name==\"win11-vm$i\") | .vmid")
